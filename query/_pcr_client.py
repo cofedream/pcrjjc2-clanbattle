@@ -128,24 +128,24 @@ class PcrClient:
 
     @staticmethod
     def _Pack(data: object, key: bytes) -> bytes:
-        aes = AES.new(key, AES.MODE_CBC, b'ha4nBYA2APUD6Uv1')
+        aes = AES.new(key, AES.MODE_CBC, b'7Fk9Lm3Np8Qr4Sv2')
         return aes.encrypt(PcrClient._AddTo16(packb(data, use_bin_type=False))) + key
 
     @staticmethod
     def _Encrypt(data: str, key: bytes) -> bytes:
-        aes = AES.new(key, AES.MODE_CBC, b'ha4nBYA2APUD6Uv1')
+        aes = AES.new(key, AES.MODE_CBC, b'7Fk9Lm3Np8Qr4Sv2')
         return aes.encrypt(PcrClient._AddTo16(data.encode('utf8'))) + key
 
     @staticmethod
     def _Decrypt(data: bytes):
         data = b64decode(data.decode('utf8'))
-        aes = AES.new(data[-32:], AES.MODE_CBC, b'ha4nBYA2APUD6Uv1')
+        aes = AES.new(data[-32:], AES.MODE_CBC, b'7Fk9Lm3Np8Qr4Sv2')
         return aes.decrypt(data[:-32]), data[-32:]
 
     @staticmethod
     def _Unpack(data: bytes):
         data = b64decode(data.decode('utf8'))
-        aes = AES.new(data[-32:], AES.MODE_CBC, b'ha4nBYA2APUD6Uv1')
+        aes = AES.new(data[-32:], AES.MODE_CBC, b'7Fk9Lm3Np8Qr4Sv2')
         dec = aes.decrypt(data[:-32])
         return unpackb(dec[:-dec[-1]], strict_map_key=False), data[-32:]
     
