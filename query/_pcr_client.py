@@ -5,8 +5,9 @@ from msgpack import packb, unpackb
 #from hoshino.aiorequests import post
 import aiohttp
 from random import randint
-from json import loads
+from json import loads, load, dump
 from hashlib import md5
+from secrets import token_hex
 from Crypto.Cipher import AES
 from base64 import b64encode, b64decode
 from ._bili_game_sdk import TryLogin
@@ -26,6 +27,43 @@ gs_versionCachePath = join(gs_curpath, 'data/version.txt')
 if exists(gs_versionCachePath):
     with open(gs_versionCachePath, 'r', encoding='utf-8') as fp:
         g_nowVersion = fp.read().strip()
+
+gs_deviceCachePath = join(gs_curpath, 'data/device.json')
+_g_deviceIds = None
+
+def GetDeviceId(account: str) -> str:
+    """
+    获取账号对应的 DEVICE-ID。若该账号尚无记录，则生成一个随机的 32 位
+    十六进制设备号，并写入 gs_deviceCachePath 持久化。
+
+    设备号按账号隔离：每个账号拥有独立设备号，单个设备号被封不影响其他账号；
+    且重启后保持不变，避免频繁更换设备触发风控。
+
+    Args:
+        account (str): PCR账号
+
+    Returns:
+        str: 该账号的 DEVICE-ID
+    """
+    global _g_deviceIds
+    if _g_deviceIds is None:
+        try:
+            with open(gs_deviceCachePath, 'r', encoding='utf-8') as fp:
+                _g_deviceIds = load(fp)
+        except Exception:
+            _g_deviceIds = {}
+    deviceId = _g_deviceIds.get(account)
+    if not deviceId:
+        deviceId = token_hex(16)
+        _g_deviceIds[account] = deviceId
+        try:
+            makedirs(dirname(gs_deviceCachePath), exist_ok=True)
+            with open(gs_deviceCachePath, 'w', encoding='utf-8') as fp:
+                dump(_g_deviceIds, fp, indent=4, ensure_ascii=False)
+        except Exception:
+            pass
+    return deviceId
+
 gs_defaultHeaders = {
     'Accept-Encoding': 'gzip',
     'User-Agent': 'Dalvik/2.1.0 (Linux, U, Android 5.1.1, PCRT00 Build/LMY48Z)',
@@ -34,7 +72,8 @@ gs_defaultHeaders = {
     'BATTLE-LOGIC-VERSION': '4',
     'BUNDLE-VER': '',
     'DEVICE': '2',
-    'DEVICE-ID': '7b1703a5d9b394e24051d7a5d4818f17',
+    # DEVICE-ID 在 PcrClient.__init__ 中按账号填充分配，此处仅为占位
+    'DEVICE-ID': '',
     'DEVICE-NAME': 'OPPO PCRT00',
     'EXCEL-VER': '1.0.0',
     'GRAPHICS-DEVICE-NAME': 'Adreno (TM) 640',
@@ -96,6 +135,7 @@ class PcrClient:
         
         self._viewerId = 0
         self._headers = deepcopy(gs_defaultHeaders)
+        self._headers['DEVICE-ID'] = GetDeviceId(account)
         self._headers['PLATFORM'] = str(self._platform)
         self._headers['PLATFORM-ID'] = str(self._platform)
         self._headers['CHANNEL-ID'] = str(self._channel)
