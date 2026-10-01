@@ -97,11 +97,22 @@ def _get_status_background():
 		except Exception as e:
 			logger.error(f'打开卡面失败: {e}')
 
-	# 2.直接读取 hoshino 资源包中的卡面（原版 hoshino 没有卡面资源，这里通常取不到）
+	# 2.直接读取 hoshino 资源包中的卡面（原版 hoshino 不自带卡面，需自己放进去）
+	#    放置路径：R.img('priconne/unit/card_{角色id}_{星级}.webp').path
+	#             = {hoshino.config.RES_DIR}/img/priconne/unit/card_{角色id}_{星级}.webp
+	#    素材来源：https://redive.estertion.win/card/full/{角色id}{星级}1.webp
+	#             （PCR 素材镜像站，1408x792 正好 16:9；star 只有 3 和 6，1 星 404；约 1MB/张）
+	#             例：1001 的 3 星 = https://redive.estertion.win/card/full/100131.webp
+	#                            -> 存为 card_1001_3.webp
+	#             webp 无需转码，Pillow 可直接读，所以这里同时试 png/webp 两种后缀，
+	#             直接 curl 下来的原始文件放进去就能用（详见 README「一图流背景图」）。
 	if role_id is not None:
 		for path in (f'priconne/unit/card_{role_id}_{star}.png',
+					f'priconne/unit/card_{role_id}_{star}.webp',
 					f'priconne/card/{role_id}_{star}.png',
-					f'priconne/unit/card_{role_id}.png'):
+					f'priconne/card/{role_id}_{star}.webp',
+					f'priconne/unit/card_{role_id}.png',
+					f'priconne/unit/card_{role_id}.webp'):
 			try:
 				return R.img(path).open(), getattr(c, 'name', '') or ''
 			except Exception:
