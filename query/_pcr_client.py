@@ -21,7 +21,7 @@ import asyncio
 gs_apiRoot = 'http://le1-prod-all-gs-gzlj.bilibiligame.net'
 gs_debugging = False
 gs_curpath = dirname(__file__)
-g_nowVersion = "4.9.7"
+g_nowVersion = "11.7.2"
 gs_versionCachePath = join(gs_curpath, 'data/version.txt')
 if exists(gs_versionCachePath):
     with open(gs_versionCachePath, 'r', encoding='utf-8') as fp:
@@ -149,6 +149,39 @@ class PcrClient:
         dec = aes.decrypt(data[:-32])
         return unpackb(dec[:-dec[-1]], strict_map_key=False), data[-32:]
     
+    def _UpdateVersion(self, data_headers: dict) -> bool:
+        """
+        从 data_headers.store_url 中解析最新客户端版本号并更新 APP-VER。
+
+        客户端版本过旧时服务器会拒绝请求，但会在 data_headers.store_url 中给出
+        最新版客户端的下载地址（形如 .../gzlj_11.7.2_xxxx.apk），据此自动修正。
+
+        Returns:
+            bool: APP-VER 是否发生了变化
+        """
+        global g_nowVersion
+        if not data_headers:
+            return False
+        store_url = data_headers.get('store_url', '')
+        if not store_url:
+            return False
+        res = re.search(r"\d+\.\d+\.\d+", store_url)
+        if not res:
+            return False
+        version = res.group(0)
+        if version == g_nowVersion and self._headers.get('APP-VER') == version:
+            return False
+        g_nowVersion = version
+        gs_defaultHeaders['APP-VER'] = version
+        self._headers['APP-VER'] = version
+        try:
+            with open(gs_versionCachePath, "w", encoding='utf-8') as fp:
+                print(version, file=fp)
+        except Exception:
+            pass
+        print(f'pcrclient: 客户端版本已自动更新为 {version}')
+        return True
+
     def GetAccessKey(self):
         return self._access_key
     def GetUID(self):
@@ -206,15 +239,8 @@ class PcrClient:
                     
                     # 维护版本
                     data_headers = response['data_headers']
-                    if "/check/game_start" == apiUrl and "store_url" in data_headers:
-                        pattern = re.compile(r"\d{1,2}\.\d{1,2}\.\d{1,2}")
-                        res = pattern.findall(data_headers["store_url"])
-                        if len(res):
-                            global g_nowVersion
-                            g_nowVersion = res[0]
-                            gs_defaultHeaders['APP-VER'] = g_nowVersion
-                            with open(gs_versionCachePath, "w", encoding='utf-8') as fp:
-                                print(g_nowVersion, file=fp)
+                    if "/check/game_start" == apiUrl:
+                        self._UpdateVersion(data_headers)
 
                     # 维护对象数据
                     if data_headers.get('sid', '') != '':
@@ -241,6 +267,8 @@ class PcrClient:
                             pass
                     if 'server_error' in data:
                         print(f'pcrclient: {apiUrl} api failed {data}')
+                        # 版本过旧(status 3)时从 store_url 自动修正 APP-VER，供上层重试
+                        self._UpdateVersion(data_headers)
                         self.needLoginAndCheck = True
                         self._homeIndexCache = None
                         self._loadIndexCache = None
@@ -287,7 +315,17 @@ class PcrClient:
         if 'REQUEST-ID' in self._headers:
             self._headers.pop('REQUEST-ID')
 
-        maintenanceStatus = await self.CallApi('/source_ini/get_maintenance_status?format=json', {}, crypted=False, raiseOnErrInData=True)
+        for attempt in range(2):
+            version_before = g_nowVersion
+            try:
+                maintenanceStatus = await self.CallApi('/source_ini/get_maintenance_status?format=json', {}, crypted=False, raiseOnErrInData=True)
+                break
+            except ApiException as e:
+                # status 3 = 客户端版本不匹配。CallApi 已尝试用 store_url 修正 APP-VER，
+                # 若确实修正成功则重试一次，否则原样抛出。
+                if attempt == 0 and e.code == 3 and g_nowVersion != version_before:
+                    continue
+                raise
         if 'maintenance_message' in maintenanceStatus:
             raise Exception(f'服务器维护中')
 
