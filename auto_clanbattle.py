@@ -56,6 +56,70 @@ current_folder = dirname(__file__)
 img_folder = join(current_folder, 'img')
 font_file = join(img_folder, 'pcrcnfont.ttf')
 
+
+# 一图流背景模式：
+#	'solid'  = 纯浅色底（推荐，报表类图片对比度最稳，也不会每题重绘时重复解码大图）
+#	'random' = 随机 pcr 卡面 / img/bg 自定义背景图（原作者的玩法，需要卡面资源）
+STATUS_BG_MODE = 'solid'
+STATUS_BG_COLOR = '#FFE4C4'   # 暖白，与「出刀时段统计」用同一底色，深色字对比度足够
+
+# 出刀状态文字颜色（15px 小字，压在浅色面板上）
+# 原配色是给深色底图用的：黄色 #FFFF00 在浅底上对比度只有 1.05:1，基本看不见，故换成深金
+NAME_COLOR_NONE = '#FF0000'   # 未出刀（浅底 3.55:1）
+NAME_COLOR_HALF = '#FF00FF'   # 已出刀未出完（浅底 2.78:1）
+NAME_COLOR_DONE = '#8C6900'   # 出完刀（原 #FFFF00，浅底 4.50:1）
+
+
+def _get_status_background():
+	'''生成一图流的背景图。
+	默认纯浅色底：这是一张统计报表，底图会把照片的亮部/细节透过半透明面板去干扰读字。
+	返回 (背景图, 角色名)，角色名为空字符串表示不画右下角角色名水印。'''
+	if STATUS_BG_MODE != 'random':
+		return Image.new('RGB', (1920, 1080), STATUS_BG_COLOR), ''
+
+	role_id = star = None
+	c = None
+	try:
+		ids = list(_pcr_data.CHARA_NAME.keys())
+		if ids:
+			role_id = random.choice(ids)
+			while chara.is_npc(role_id): role_id = random.choice(ids)
+			star = random.choice([3, 6])
+			c = chara.fromid(role_id, star)
+	except Exception as e:
+		logger.error(f'随机卡面角色失败，将使用兜底背景: {e}')
+
+	# 1.优先使用（可能被修改过的）hoshino 的卡面接口
+	card = getattr(c, 'card', None)
+	if card is not None:
+		try:
+			return card.open(), getattr(c, 'name', '') or ''
+		except Exception as e:
+			logger.error(f'打开卡面失败: {e}')
+
+	# 2.直接读取 hoshino 资源包中的卡面（原版 hoshino 没有卡面资源，这里通常取不到）
+	if role_id is not None:
+		for path in (f'priconne/unit/card_{role_id}_{star}.png',
+					f'priconne/card/{role_id}_{star}.png',
+					f'priconne/unit/card_{role_id}.png'):
+			try:
+				return R.img(path).open(), getattr(c, 'name', '') or ''
+			except Exception:
+				continue
+
+	# 3.本地自定义背景图（img/bg 目录）
+	try:
+		bg_folder = join(img_folder, 'bg')
+		bgs = [f for f in os.listdir(bg_folder)
+			   if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.bmp'))]
+		if bgs:
+			return Image.open(join(bg_folder, random.choice(bgs))), ''
+	except Exception as e:
+		logger.error(f'读取自定义背景图失败: {e}')
+
+	# 4.兜底回浅色底
+	return Image.new('RGB', (1920, 1080), STATUS_BG_COLOR), ''
+
 cqbot = get_bot()
 secret = Secret()
 event_cache = {}
@@ -743,12 +807,9 @@ async def status(bot:HoshinoBot, ev:CQEvent):
 		# bg_num = random.randint(0, len(bg)-1)
 		# img = Image.open(img_folder+'/bg/'+bg[bg_num])
 		# img = img.resize((1920,1080),Image.Resampling.LANCZOS)
-		ids = list(_pcr_data.CHARA_NAME.keys())					#随机pcr卡面背景图（个人专用，因为改了hoshino的接口）
-		role_id = random.choice(ids)
-		while chara.is_npc(role_id): role_id = random.choice(ids)
-		star = random.choice([3,6])
-		c = chara.fromid(role_id, star)
-		img:Image.Image = c.card.open()
+		# 报表用纯浅色底，原先的随机卡面已改成 'random' 模式的可选项（见 _get_status_background）
+		img:Image.Image
+		img, role_name = _get_status_background()
 
 		img = img.convert('RGBA')
 		img = img.resize((1920,1080), Image.Resampling.LANCZOS)
@@ -777,8 +838,9 @@ async def status(bot:HoshinoBot, ev:CQEvent):
 		blurred_mask = mask.filter(ImageFilter.GaussianBlur(5))	#给画好的底框添加模糊效果
 		img.paste(blurred_mask, (0, 0), blurred_mask)
 		
-		name_length = draw.textlength(c.name, font=setFont_15)
-		draw.text((img.size[0] - name_length-10, img.size[1]-25), c.name, font=setFont_15, fill="#000000") #背景图角色名
+		if role_name:
+			name_length = draw.textlength(role_name, font=setFont_15)
+			draw.text((img.size[0] - name_length-10, img.size[1]-25), role_name, font=setFont_15, fill="#000000") #背景图角色名
 
 		#boss信息部分
 		lap = battle_info['lap_num']
@@ -932,9 +994,9 @@ async def status(bot:HoshinoBot, ev:CQEvent):
 				kill_acc = 3
 			all_battle_count += kill_acc
 
-			if kill_acc == 0: draw.text((132+149*width, 761+60*row), f'{name}', font=setFont_15, fill="#FF0000")		#未出刀
-			elif 0< kill_acc < 3: draw.text((132+149*width, 761+60*row), f'{name}', font=setFont_15, fill="#FF00FF")	#已出刀未出完
-			elif kill_acc == 3: draw.text((132+149*width, 761+60*row), f'{name}', font=setFont_15, fill="#FFFF00")		#出完刀
+			if kill_acc == 0: draw.text((132+149*width, 761+60*row), f'{name}', font=setFont_15, fill=NAME_COLOR_NONE)		#未出刀
+			elif 0< kill_acc < 3: draw.text((132+149*width, 761+60*row), f'{name}', font=setFont_15, fill=NAME_COLOR_HALF)	#已出刀未出完
+			elif kill_acc == 3: draw.text((132+149*width, 761+60*row), f'{name}', font=setFont_15, fill=NAME_COLOR_DONE)		#出完刀
 			width2 = 0
 			kill_acc = kill_acc - half_sign
 
